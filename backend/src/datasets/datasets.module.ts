@@ -303,24 +303,35 @@ function mimeToLabel(mimeType: string, fileName: string): string {
     return this.serializeOne(updated);
   }
 
-  async delete(id: string, actorId: string) {
-    const dataset = await this.prisma.dataset.findUnique({
-      where: { id }, include: { versions: true },
-    });
-    if (!dataset) throw new NotFoundException();
+ async delete(id: string, actorId: string) {
+  const dataset = await this.prisma.dataset.findUnique({
+    where: { id }, include: { versions: true },
+  });
+  if (!dataset) throw new NotFoundException();
 
-    // Best-effort delete files from storage
-    for (const v of dataset.versions) {
-      await this.storage.delete(v.fileKey);
-    }
-
-    await this.prisma.dataset.delete({ where: { id } });
-    await this.audit.log({
-      action: AuditAction.DATASET_DELETED,
-      actorId, targetType: 'Dataset', targetId: id,
-      metadata: { name: dataset.name },
-    });
+  // Best-effort delete files from storage
+  for (const v of dataset.versions) {
+    await this.storage.delete(v.fileKey);
   }
+
+  // Clear child rows that don't cascade — Download FK blocks the delete otherwise
+  await this.prisma.$transaction([
+    this.prisma.dataset.update({
+      where: { id },
+      data: { currentVersionId: null },
+    }),
+    this.prisma.download.deleteMany({ where: { datasetId: id } }),
+    this.prisma.datasetAccess.deleteMany({ where: { datasetId: id } }),
+    this.prisma.datasetVersion.deleteMany({ where: { datasetId: id } }),
+    this.prisma.dataset.delete({ where: { id } }),
+  ]);
+
+  await this.audit.log({
+    action: AuditAction.DATASET_DELETED,
+    actorId, targetType: 'Dataset', targetId: id,
+    metadata: { name: dataset.name },
+  });
+}
 
   // Client-facing — secure presigned download
   async getDownloadUrl(
