@@ -15,6 +15,7 @@ import { AdminModule } from './admin/admin.module';
 import { HealthModule } from './health/health.module';
 import { SearchModule } from './search/search.module';
 import { CategoriesModule } from './categories/categories.module';
+import { PreviewModule } from './preview/preview.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
@@ -34,6 +35,7 @@ import { CategoriesModule } from './categories/categories.module';
     HealthModule,
     SearchModule,
     CategoriesModule,
+    PreviewModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })

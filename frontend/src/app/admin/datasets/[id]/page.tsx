@@ -9,6 +9,7 @@ import { ArrowLeft, Upload as UploadIcon } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { formatBytes, getErrorMessage } from '@/lib/utils';
+import { DatasetPreviewTable } from '@/components/DatasetPreviewTable';
 
 export default function AdminDatasetDetail() {
   const params = useParams<{ id: string }>();
@@ -50,6 +51,18 @@ export default function AdminDatasetDetail() {
           <Meta label="File size" value={data.currentVersion ? formatBytes(data.currentVersion.fileSizeBytes) : '—'} />
         </div>
       </div>
+
+      {data.currentVersion && (
+        <section className="bg-white border border-stone-200 rounded-xl">
+          <div className="px-5 py-3 border-b border-stone-200">
+            <h2 className="text-sm font-semibold">Preview</h2>
+            <p className="text-xs text-stone-500 mt-0.5">What clients will see when browsing this dataset.</p>
+          </div>
+          <div className="p-5">
+            <DatasetPreviewTable datasetId={data.id} />
+          </div>
+        </section>
+      )}
 
       <div className="bg-white border border-stone-200 rounded-xl">
         <div className="px-5 py-3 border-b border-stone-200">

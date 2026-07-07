@@ -139,6 +139,7 @@ model DatasetVersion {
   fileSizeBytes   BigInt
   mimeType        String
   changelog       String?  @db.Text
+  previewData     Json?    // { columns: string[], rows: any[][], totalRows: number, sheetName?: string }
   publishedAt     DateTime @default(now())
 
   currentFor      Dataset? @relation("CurrentVersion")

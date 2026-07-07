@@ -13,6 +13,8 @@ import { IsEnum, IsOptional, IsString, MinLength, Matches, IsBoolean } from 'cla
 import { PrismaService } from '../prisma/prisma.module';
 import { AuditService } from '../audit/audit.module';
 import { StorageService } from '../storage/storage.module';
+import { PreviewService } from '../preview/preview.module';
+import { PreviewModule } from '../preview/preview.module';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles, CurrentUser, JwtPayload } from '../auth/decorators/roles.decorator';
@@ -60,6 +62,7 @@ export class DatasetsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly preview: PreviewService,
   ) {}
 
   async listForClient(userId: string, params: {
@@ -228,6 +231,9 @@ export class DatasetsService {
   },
 });
 
+    // Generate preview (best-effort — never fail the upload)
+    await this.generatePreviewFor(version.id, dto.fileKey, dto.fileName, dto.mimeType);
+
     const fileTypeFromMime = mimeToLabel(dto.mimeType, dto.fileName);
 // ─── Helpers ──────────────────────────────────────────────────────
 
@@ -272,6 +278,64 @@ function mimeToLabel(mimeType: string, fileName: string): string {
     return this.serializeOne(version);
   }
 
+  /** Best-effort preview generation. Fetches file bytes and stores preview JSON. */
+  private async generatePreviewFor(
+    versionId: string,
+    fileKey: string,
+    fileName: string,
+    mimeType: string,
+  ): Promise<void> {
+    try {
+      const bytes = await this.storage.fetchBytes(fileKey);
+      const result = this.preview.fromBytes(bytes, fileName, mimeType);
+      await this.prisma.datasetVersion.update({
+        where: { id: versionId },
+        data: { previewData: result as any },
+      });
+    } catch (err) {
+      // Never let preview failure break the upload flow
+      // eslint-disable-next-line no-console
+      console.warn(`[preview] Failed to generate for version ${versionId}: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Return preview for a dataset's current version.
+   * Lazy-generates and caches if not present (e.g. for datasets uploaded
+   * before preview support was added).
+   */
+  async getPreview(datasetId: string, user: JwtPayload) {
+    const dataset = await this.prisma.dataset.findUnique({
+      where: { id: datasetId },
+      include: { currentVersion: true },
+    });
+    if (!dataset) throw new NotFoundException();
+    if (user.role === UserRole.CLIENT && dataset.status !== DatasetStatus.PUBLISHED) {
+      throw new NotFoundException();
+    }
+    if (!dataset.currentVersion) {
+      return {
+        supported: false,
+        reason: 'This dataset has no file uploaded yet.',
+      };
+    }
+
+    const version = dataset.currentVersion;
+    if (version.previewData) {
+      return version.previewData;
+    }
+
+    // Lazy: generate now, cache, return
+    await this.generatePreviewFor(version.id, version.fileKey, version.fileName, version.mimeType);
+    const refreshed = await this.prisma.datasetVersion.findUnique({ where: { id: version.id } });
+    return (
+      refreshed?.previewData ?? {
+        supported: false,
+        reason: 'Preview could not be generated for this file.',
+      }
+    );
+  }
+
   async publish(id: string, actorId: string) {
     const dataset = await this.prisma.dataset.findUnique({
       where: { id },
@@ -303,35 +367,24 @@ function mimeToLabel(mimeType: string, fileName: string): string {
     return this.serializeOne(updated);
   }
 
- async delete(id: string, actorId: string) {
-  const dataset = await this.prisma.dataset.findUnique({
-    where: { id }, include: { versions: true },
-  });
-  if (!dataset) throw new NotFoundException();
+  async delete(id: string, actorId: string) {
+    const dataset = await this.prisma.dataset.findUnique({
+      where: { id }, include: { versions: true },
+    });
+    if (!dataset) throw new NotFoundException();
 
-  // Best-effort delete files from storage
-  for (const v of dataset.versions) {
-    await this.storage.delete(v.fileKey);
+    // Best-effort delete files from storage
+    for (const v of dataset.versions) {
+      await this.storage.delete(v.fileKey);
+    }
+
+    await this.prisma.dataset.delete({ where: { id } });
+    await this.audit.log({
+      action: AuditAction.DATASET_DELETED,
+      actorId, targetType: 'Dataset', targetId: id,
+      metadata: { name: dataset.name },
+    });
   }
-
-  // Clear child rows that don't cascade — Download FK blocks the delete otherwise
-  await this.prisma.$transaction([
-    this.prisma.dataset.update({
-      where: { id },
-      data: { currentVersionId: null },
-    }),
-    this.prisma.download.deleteMany({ where: { datasetId: id } }),
-    this.prisma.datasetAccess.deleteMany({ where: { datasetId: id } }),
-    this.prisma.datasetVersion.deleteMany({ where: { datasetId: id } }),
-    this.prisma.dataset.delete({ where: { id } }),
-  ]);
-
-  await this.audit.log({
-    action: AuditAction.DATASET_DELETED,
-    actorId, targetType: 'Dataset', targetId: id,
-    metadata: { name: dataset.name },
-  });
-}
 
   // Client-facing — secure presigned download
   async getDownloadUrl(
@@ -443,6 +496,11 @@ export class DatasetsController {
     return this.svc.detail(id, user);
   }
 
+  @Get(':id/preview')
+  preview(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.svc.getPreview(id, user);
+  }
+
   @Post(':id/download')
   download(
     @Param('id') id: string,
@@ -512,6 +570,7 @@ export class DatasetsController {
 }
 
 @Module({
+  imports: [PreviewModule],
   controllers: [DatasetsController],
   providers: [DatasetsService],
   exports: [DatasetsService],

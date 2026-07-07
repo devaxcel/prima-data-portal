@@ -82,6 +82,19 @@ export class StorageService {
     return res.ContentLength ?? 0;
   }
 
+  /** Fetch full object bytes. Used server-side for preview generation. */
+  async fetchBytes(key: string): Promise<Buffer> {
+    const res = await this.requireClient().send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+    );
+    const stream = res.Body as NodeJS.ReadableStream;
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : Buffer.from(chunk));
+    }
+    return Buffer.concat(chunks);
+  }
+
   buildKey(slug: string, version: string, fileName: string): string {
     const safe = fileName.replace(/[^A-Za-z0-9._-]/g, '_');
     return `datasets/${slug}/${version}/${Date.now()}-${safe}`;

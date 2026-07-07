@@ -7,6 +7,7 @@ import { ArrowLeft, Download } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { formatBytes, getErrorMessage } from '@/lib/utils';
+import { DatasetPreviewTable } from '@/components/DatasetPreviewTable';
 
 export default function ClientDatasetDetail() {
   const params = useParams<{ id: string }>();
@@ -61,6 +62,20 @@ export default function ClientDatasetDetail() {
           </div>
         )}
       </div>
+
+      {data.currentVersion && (
+        <section className="bg-white border border-stone-200 rounded-xl">
+          <div className="px-5 py-3 border-b border-stone-200 flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold">Preview</h2>
+              <p className="text-xs text-stone-500 mt-0.5">First rows of the current version — full data available on download.</p>
+            </div>
+          </div>
+          <div className="p-5">
+            <DatasetPreviewTable datasetId={params.id} />
+          </div>
+        </section>
+      )}
 
       <div className="bg-white border border-stone-200 rounded-xl">
         <div className="px-5 py-3 border-b border-stone-200">
