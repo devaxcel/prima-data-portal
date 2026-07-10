@@ -1,34 +1,29 @@
 import { Global, Module, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private transporter?: nodemailer.Transporter;
+  private resend?: Resend;
   private from: string;
   private logToConsole: boolean;
 
   constructor(private readonly config: ConfigService) {
-    this.from = this.config.get<string>('SMTP_FROM') ?? 'no-reply@example.com';
+    this.from = this.config.get<string>('SMTP_FROM') ?? 'Prima Data Portal <onboarding@resend.dev>';
     this.logToConsole = this.config.get('EMAIL_LOG_TO_CONSOLE') === 'true';
 
-    const host = this.config.get<string>('SMTP_HOST');
-    if (host && !this.logToConsole) {
-      this.transporter = nodemailer.createTransport({
-        host,
-        port: Number(this.config.get('SMTP_PORT') ?? 587),
-        secure: false,
-        auth: {
-          user: this.config.get('SMTP_USER'),
-          pass: this.config.get('SMTP_PASS'),
-        },
-      });
+    const apiKey = this.config.get<string>('RESEND_API_KEY');
+    if (apiKey && !this.logToConsole) {
+      this.resend = new Resend(apiKey);
+      this.logger.log(`Email transport: Resend HTTP API (from: ${this.from})`);
+    } else {
+      this.logger.warn('Email transport: CONSOLE (no RESEND_API_KEY set) — emails will be logged only');
     }
   }
 
   async send(to: string, subject: string, html: string, text?: string): Promise<void> {
-    if (this.logToConsole || !this.transporter) {
+    if (this.logToConsole || !this.resend) {
       this.logger.log(`\n────── EMAIL (console mode) ──────`);
       this.logger.log(`To:      ${to}`);
       this.logger.log(`Subject: ${subject}`);
@@ -36,13 +31,25 @@ export class EmailService {
       this.logger.log(`──────────────────────────────────\n`);
       return;
     }
-   try {
-  const info = await this.transporter.sendMail({ from: this.from, to, subject, html, text });
-  this.logger.log(`✉  Email sent to ${to} — messageId: ${info.messageId}`);
-} catch (err) {
-  this.logger.error(`Failed to send email to ${to}: ${(err as Error).message}`);
-  this.logger.error((err as Error).stack);
-}
+
+    try {
+      const { data, error } = await this.resend.emails.send({
+        from: this.from,
+        to,
+        subject,
+        html,
+        text,
+      });
+
+      if (error) {
+        this.logger.error(`Resend rejected email to ${to}: ${JSON.stringify(error)}`);
+        return;
+      }
+      this.logger.log(`✉  Email sent to ${to} — id: ${data?.id ?? 'unknown'}`);
+    } catch (err) {
+      this.logger.error(`Failed to send email to ${to}: ${(err as Error).message}`);
+      this.logger.error((err as Error).stack);
+    }
   }
 
   async sendInvite(to: string, name: string, inviteUrl: string): Promise<void> {
