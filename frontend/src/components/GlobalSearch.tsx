@@ -9,7 +9,7 @@ import { useAuth } from '@/lib/auth';
 interface DatasetResult {
   id: string;
   name: string;
-  category: string;
+  category: { id: string; name: string; slug: string } | null;
   status: string;
   fileType: string | null;
 }
