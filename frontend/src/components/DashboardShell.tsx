@@ -89,7 +89,9 @@ export function DashboardShell({ children, nav, allowedRoles }: Props) {
 
           <nav className="space-y-0.5 flex-1">
             {nav.map((item) => {
-              const active = pathname === item.href || pathname.startsWith(item.href + '/');
+              const active =
+  pathname === item.href ||
+  (item.href !== '/admin' && item.href !== '/portal' && pathname.startsWith(item.href + '/'));
               return (
                 <Link
                   key={item.href}
