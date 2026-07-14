@@ -145,19 +145,22 @@ export default function AdminDatasetsPage() {
                 <Td className="text-stone-500">{d._count?.downloads ?? 0}</Td>
                 <Td className="text-stone-500 text-xs">{format(new Date(d.updatedAt), 'd MMM yyyy')}</Td>
                 <Td className="space-x-2 whitespace-nowrap">
-                  {d.status === 'DRAFT' && (
-                    <button onClick={() => publish.mutate(d.id)} className="text-xs text-brand-600 hover:underline">Publish</button>
-                  )}
-                  {d.status === 'PUBLISHED' && (
-                    <button onClick={() => archive.mutate(d.id)} className="text-xs text-amber-700 hover:underline">Archive</button>
-                  )}
-                  <button
-                    onClick={() => { if (confirm(`Delete "${d.name}"? This removes all versions and files.`)) remove.mutate(d.id); }}
-                    className="text-xs text-red-600 hover:underline"
-                  >
-                    Delete
-                  </button>
-                </Td>
+  {d.status === 'DRAFT' && (
+    <button onClick={() => publish.mutate(d.id)} className="text-xs text-brand-600 hover:underline">Publish</button>
+  )}
+  {d.status === 'PUBLISHED' && (
+    <button onClick={() => archive.mutate(d.id)} className="text-xs text-amber-700 hover:underline">Archive</button>
+  )}
+  {d.status === 'ARCHIVED' && (
+    <button onClick={() => publish.mutate(d.id)} className="text-xs text-green-700 hover:underline">Republish</button>
+  )}
+  <button
+    onClick={() => { if (confirm(`Delete "${d.name}"? This removes all versions and files.`)) remove.mutate(d.id); }}
+    className="text-xs text-red-600 hover:underline"
+  >
+    Delete
+  </button>
+</Td>
               </tr>
             ))}
             {data?.items?.length === 0 && (
