@@ -40,18 +40,36 @@ export default function PortalPage() {
   const items = data?.items ?? [];
   const selected = items.find((d: any) => d.id === selectedId) ?? items[0];
 
-  // Group by category when sorting by category, otherwise show flat
+  // Group by top-level category ancestor when sorting by category
   const groups = useMemo(() => {
     if (sortBy !== 'category' || items.length === 0) return null;
+    if (!categories.data) return null; // wait for categories to load before grouping
+
+    // Build id → category map to walk the parent chain
+    const catMap = new Map<string, { id: string; name: string; parentId: string | null }>();
+    categories.data.forEach((c: any) => catMap.set(c.id, c));
+
+    // Find the top-level ancestor (a category with no parent) for any category id
+    const rootOf = (catId: string | null | undefined): { id: string; name: string } => {
+      if (!catId) return { id: '__none__', name: 'Uncategorised' };
+      let cur = catMap.get(catId);
+      if (!cur) return { id: '__none__', name: 'Uncategorised' };
+      let safety = 0;
+      while (cur.parentId && catMap.has(cur.parentId) && safety < 50) {
+        cur = catMap.get(cur.parentId)!;
+        safety++;
+      }
+      return { id: cur.id, name: cur.name };
+    };
+
     const map = new Map<string, { name: string; datasets: any[] }>();
     for (const d of items) {
-      const key = d.category?.id ?? '__none__';
-      const name = d.category?.name ?? 'Uncategorised';
-      if (!map.has(key)) map.set(key, { name, datasets: [] });
-      map.get(key)!.datasets.push(d);
+      const root = rootOf(d.category?.id);
+      if (!map.has(root.id)) map.set(root.id, { name: root.name, datasets: [] });
+      map.get(root.id)!.datasets.push(d);
     }
     return Array.from(map.values());
-  }, [items, sortBy]);
+  }, [items, sortBy, categories.data]);
 
   const download = useMutation({
     mutationFn: async (id: string) => (await api.post(`/datasets/${id}/download`, {})).data,
