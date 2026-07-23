@@ -54,23 +54,63 @@ export class PreviewService {
 
     try {
       const workbook = XLSX.read(bytes, { type: 'buffer', cellDates: true, cellFormula: false });
-      const sheetName = workbook.SheetNames[0];
-      if (!sheetName) {
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
         return { supported: false, reason: 'The file has no readable sheets.' };
       }
 
-      const sheet = workbook.Sheets[sheetName];
-      const aoa = XLSX.utils.sheet_to_json<any[]>(sheet, {
-        header: 1,
-        blankrows: false,
-        defval: null,
-        raw: false, // stringifies dates, numbers → readable strings
-      });
+      // Try each sheet in order; take the first with meaningful tabular data.
+      // Complex Excel models (e.g. financial models) often have a "Dashboard"
+      // sheet full of charts as sheet 0 — no tabular data. We should skip past
+      // that to find the actual data sheet (Income Statement, Balance Sheet, etc).
+      let best: {
+        sheetName: string;
+        aoa: any[][];
+        score: number;
+      } | null = null;
 
-      if (aoa.length === 0) {
-        return { supported: false, reason: 'The sheet is empty.' };
+      for (const candidateName of workbook.SheetNames) {
+        const sheet = workbook.Sheets[candidateName];
+        if (!sheet) continue;
+        const aoa = XLSX.utils.sheet_to_json<any[]>(sheet, {
+          header: 1,
+          blankrows: false,
+          defval: null,
+          raw: false,
+        });
+
+        // Score based on how "tabular" the data looks
+        const rowCount = aoa.length;
+        if (rowCount < 2) continue;
+
+        const headerRow = (aoa[0] ?? []) as any[];
+        const colCount = headerRow.length;
+        if (colCount < 2) continue;
+
+        // Count non-null cells across all rows (sample first 20 rows for speed)
+        let nonNullCells = 0;
+        for (let i = 0; i < Math.min(20, aoa.length); i++) {
+          const row = (aoa[i] ?? []) as any[];
+          nonNullCells += row.filter((v) => v != null && v !== '').length;
+        }
+        // Score: cells × rows-log — favours sheets with real content
+        const score = nonNullCells * Math.log2(Math.max(rowCount, 2));
+
+        if (!best || score > best.score) {
+          best = { sheetName: candidateName, aoa, score };
+        }
+
+        // Fast-exit: first "obviously good" sheet wins
+        if (rowCount > 5 && colCount > 3 && nonNullCells > 20) {
+          best = { sheetName: candidateName, aoa, score };
+          break;
+        }
       }
 
+      if (!best || best.aoa.length === 0) {
+        return { supported: false, reason: 'No sheets in this workbook contain readable tabular data.' };
+      }
+
+      const { sheetName, aoa } = best;
       const totalRows = Math.max(0, aoa.length - 1); // excludes header
       const rawHeader = (aoa[0] ?? []) as any[];
       const totalColumns = rawHeader.length;
