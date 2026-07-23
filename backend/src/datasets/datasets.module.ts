@@ -336,6 +336,46 @@ function mimeToLabel(mimeType: string, fileName: string): string {
     );
   }
 
+  /**
+   * Admin action — force-regenerate the preview for a dataset's current version.
+   * Useful after the preview-generation logic is improved and existing datasets
+   * need their cached preview refreshed.
+   */
+  async regeneratePreview(datasetId: string) {
+    const dataset = await this.prisma.dataset.findUnique({
+      where: { id: datasetId },
+      include: { currentVersion: true },
+    });
+    if (!dataset) throw new NotFoundException();
+    if (!dataset.currentVersion) {
+      throw new BadRequestException('This dataset has no current version.');
+    }
+
+    // Clear existing preview
+    await this.prisma.datasetVersion.update({
+      where: { id: dataset.currentVersion.id },
+      data: { previewData: undefined as any },
+    });
+
+    // Generate fresh
+    await this.generatePreviewFor(
+      dataset.currentVersion.id,
+      dataset.currentVersion.fileKey,
+      dataset.currentVersion.fileName,
+      dataset.currentVersion.mimeType,
+    );
+
+    const refreshed = await this.prisma.datasetVersion.findUnique({
+      where: { id: dataset.currentVersion.id },
+    });
+    return (
+      refreshed?.previewData ?? {
+        supported: false,
+        reason: 'Preview could not be generated for this file.',
+      }
+    );
+  }
+
   async publish(id: string, actorId: string) {
     const dataset = await this.prisma.dataset.findUnique({
       where: { id },
@@ -499,6 +539,13 @@ export class DatasetsController {
   @Get(':id/preview')
   preview(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.svc.getPreview(id, user);
+  }
+
+  @Post(':id/preview/regenerate')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.ADMIN)
+  regeneratePreview(@Param('id') id: string) {
+    return this.svc.regeneratePreview(id);
   }
 
   @Post(':id/download')
