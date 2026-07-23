@@ -3,7 +3,7 @@
 import { useParams } from 'next/navigation';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { api } from '@/lib/api';
-import { ArrowLeft, Download } from 'lucide-react';
+import { ArrowLeft, Download, Info } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import { formatBytes, getErrorMessage } from '@/lib/utils';
@@ -61,6 +61,23 @@ export default function ClientDatasetDetail() {
             <Meta label="Coverage" value={data.coverage ?? '—'} />
           </div>
         )}
+
+        {isMacroEnabled(data.currentVersion?.fileName ?? '') && (
+          <div className="mt-4 border border-amber-200 bg-amber-50/60 rounded-lg p-3 flex gap-2.5">
+            <Info className="w-4 h-4 text-amber-700 flex-shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-900 leading-relaxed">
+              <div className="font-medium mb-0.5">Macros disabled by default after download</div>
+              <p>
+                This is a macro-enabled workbook (.xlsm). Windows and macOS block macros on files
+                downloaded from the web. To enable them:
+              </p>
+              <ul className="list-disc ml-4 mt-1 space-y-0.5">
+                <li><strong>Windows:</strong> Right-click the downloaded file → <em>Properties</em> → tick <em>Unblock</em> → OK → then open in Excel.</li>
+                <li><strong>Excel prompt:</strong> If Excel shows a yellow &quot;Enable Content&quot; bar at the top when opening, click it.</li>
+              </ul>
+            </div>
+          </div>
+        )}
       </div>
 
       {data.currentVersion && (
@@ -111,4 +128,9 @@ function Meta({ label, value }: { label: string; value: React.ReactNode }) {
       <div className="text-sm font-medium text-stone-900 mt-0.5">{value}</div>
     </div>
   );
+}
+
+function isMacroEnabled(fileName: string): boolean {
+  const lower = fileName.toLowerCase();
+  return lower.endsWith('.xlsm') || lower.endsWith('.xlsb') || lower.endsWith('.docm') || lower.endsWith('.pptm');
 }
