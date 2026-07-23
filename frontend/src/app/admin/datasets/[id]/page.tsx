@@ -17,6 +17,7 @@ export default function AdminDatasetDetail() {
   const qc = useQueryClient();
   const [showUpload, setShowUpload] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
+  const [previewKey, setPreviewKey] = useState(0);
 
   const { data, isLoading } = useQuery({
     queryKey: ['admin-dataset', params.id],
@@ -39,6 +40,15 @@ export default function AdminDatasetDetail() {
     mutationFn: () => api.post(`/datasets/${params.id}/archive`),
     onSuccess: invalidate,
     onError: (e) => alert(getErrorMessage(e, 'Failed to archive')),
+  });
+
+  const regeneratePreview = useMutation({
+    mutationFn: () => api.post(`/datasets/${params.id}/preview/regenerate`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['dataset-preview', params.id] });
+      setPreviewKey((k) => k + 1); // force preview component to remount
+    },
+    onError: (e) => alert(getErrorMessage(e, 'Failed to regenerate preview')),
   });
 
   if (isLoading) return <div className="text-stone-500 text-sm">Loading…</div>;
@@ -116,12 +126,23 @@ export default function AdminDatasetDetail() {
 
       {data.currentVersion && (
         <section className="bg-white border border-stone-200 rounded-xl">
-          <div className="px-5 py-3 border-b border-stone-200">
-            <h2 className="text-sm font-semibold">Preview</h2>
-            <p className="text-xs text-stone-500 mt-0.5">What clients will see when browsing this dataset.</p>
+          <div className="px-5 py-3 border-b border-stone-200 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Preview</h2>
+              <p className="text-xs text-stone-500 mt-0.5">What clients will see when browsing this dataset.</p>
+            </div>
+            <button
+              onClick={() => regeneratePreview.mutate()}
+              disabled={regeneratePreview.isPending}
+              className="inline-flex items-center gap-1.5 border border-stone-300 text-stone-700 px-2.5 py-1.5 rounded-lg text-xs font-medium hover:bg-stone-50 disabled:opacity-50"
+              title="Force preview regeneration — useful if the wrong sheet was picked"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              {regeneratePreview.isPending ? 'Refreshing…' : 'Refresh preview'}
+            </button>
           </div>
           <div className="p-5">
-            <DatasetPreviewTable datasetId={data.id} />
+            <DatasetPreviewTable datasetId={data.id} key={previewKey} />
           </div>
         </section>
       )}
