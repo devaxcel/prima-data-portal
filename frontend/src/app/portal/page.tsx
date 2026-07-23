@@ -6,7 +6,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { format } from 'date-fns';
 import { formatBytes, getErrorMessage } from '@/lib/utils';
-import { Filter, Search, Download, ArrowRight, X, ArrowUp, ArrowDown } from 'lucide-react';
+import { Filter, Search, Download, ArrowRight, X, ArrowUp, ArrowDown, ChevronRight, ChevronDown, Folder, FolderOpen } from 'lucide-react';
 import { useCategoriesFlat } from '@/lib/categories';
 
 type SortKey = 'name' | 'category' | 'updatedAt';
@@ -19,6 +19,7 @@ export default function PortalPage() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
 
   const categories = useCategoriesFlat();
 
@@ -62,14 +63,27 @@ export default function PortalPage() {
       return { id: cur.id, name: cur.name };
     };
 
-    const map = new Map<string, { name: string; datasets: any[] }>();
+    const map = new Map<string, { id: string; name: string; datasets: any[] }>();
     for (const d of items) {
       const root = rootOf(d.category?.id);
-      if (!map.has(root.id)) map.set(root.id, { name: root.name, datasets: [] });
+      if (!map.has(root.id)) map.set(root.id, { id: root.id, name: root.name, datasets: [] });
       map.get(root.id)!.datasets.push(d);
     }
     return Array.from(map.values());
   }, [items, sortBy, categories.data]);
+
+  // Auto-expand groups when the user is actively searching or filtering.
+  // Otherwise everything stays collapsed by default (Kieron's request).
+  const forceExpandAll = Boolean(search || categoryId);
+  const isExpanded = (groupId: string) => forceExpandAll || expandedGroups.has(groupId);
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) next.delete(groupId);
+      else next.add(groupId);
+      return next;
+    });
+  };
 
   const download = useMutation({
     mutationFn: async (id: string) => (await api.post(`/datasets/${id}/download`, {})).data,
@@ -192,12 +206,15 @@ export default function PortalPage() {
             )}
 
             {/* Grouped view (sort by category) */}
-            {groups && groups.map((group, gIdx) => (
+            {groups && groups.map((group) => (
               <GroupBlock
-                key={gIdx}
+                key={group.id}
+                groupId={group.id}
                 groupName={group.name}
                 items={group.datasets}
                 selected={selected}
+                expanded={isExpanded(group.id)}
+                onToggle={() => toggleGroup(group.id)}
                 onSelect={setSelectedId}
               />
             ))}
@@ -258,23 +275,38 @@ export default function PortalPage() {
   );
 }
 
-function GroupBlock({ groupName, items, selected, onSelect }: {
+function GroupBlock({ groupId, groupName, items, selected, expanded, onToggle, onSelect }: {
+  groupId: string;
   groupName: string;
   items: any[];
   selected: any;
+  expanded: boolean;
+  onToggle: () => void;
   onSelect: (id: string) => void;
 }) {
   return (
     <>
       <tr>
-        <td colSpan={5} className="px-5 py-2 bg-stone-50/80 border-y border-stone-200">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[10px] font-semibold text-brand-700 uppercase tracking-wider">{groupName}</span>
-            <span className="text-[10px] text-stone-400">{items.length}</span>
+        <td
+          colSpan={5}
+          className={`px-5 py-2.5 bg-stone-50/80 border-y border-stone-200 cursor-pointer select-none hover:bg-stone-100/70 transition ${expanded ? 'bg-stone-50' : ''}`}
+          onClick={onToggle}
+        >
+          <div className="flex items-center gap-2">
+            {expanded
+              ? <ChevronDown className="w-3.5 h-3.5 text-stone-500" />
+              : <ChevronRight className="w-3.5 h-3.5 text-stone-500" />}
+            {expanded
+              ? <FolderOpen className="w-4 h-4 text-brand-600" />
+              : <Folder className="w-4 h-4 text-brand-500" />}
+            <span className="text-[12px] font-semibold text-stone-800">{groupName}</span>
+            <span className="text-[11px] text-stone-500 ml-1">
+              {items.length} dataset{items.length === 1 ? '' : 's'}
+            </span>
           </div>
         </td>
       </tr>
-      {items.map((d: any) => (
+      {expanded && items.map((d: any) => (
         <DatasetRow key={d.id} d={d} isSelected={selected?.id === d.id} onSelect={onSelect} />
       ))}
     </>
