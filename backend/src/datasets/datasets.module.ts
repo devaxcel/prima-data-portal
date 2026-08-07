@@ -418,7 +418,21 @@ function mimeToLabel(mimeType: string, fileName: string): string {
       await this.storage.delete(v.fileKey);
     }
 
-    await this.prisma.dataset.delete({ where: { id } });
+    // Clear child rows in a transaction — Download / DatasetAccess / DatasetVersion
+    // all have FKs pointing at Dataset. Without clearing them first the delete fails
+    // with "Foreign key constraint violated". Set currentVersionId to null first to
+    // break the self-reference so versions can be deleted cleanly.
+    await this.prisma.$transaction([
+      this.prisma.dataset.update({
+        where: { id },
+        data: { currentVersionId: null },
+      }),
+      this.prisma.download.deleteMany({ where: { datasetId: id } }),
+      this.prisma.datasetAccess.deleteMany({ where: { datasetId: id } }),
+      this.prisma.datasetVersion.deleteMany({ where: { datasetId: id } }),
+      this.prisma.dataset.delete({ where: { id } }),
+    ]);
+
     await this.audit.log({
       action: AuditAction.DATASET_DELETED,
       actorId, targetType: 'Dataset', targetId: id,
