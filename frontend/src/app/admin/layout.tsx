@@ -1,6 +1,6 @@
 'use client';
 
-import { LayoutDashboard, Database, Users, FileText, Tags } from 'lucide-react';
+import { LayoutDashboard, Database, Users, FileText, Tags, Settings } from 'lucide-react';
 import { DashboardShell } from '@/components/DashboardShell';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
@@ -13,6 +13,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { href: '/admin/categories', label: 'Categories', icon: <Tags className="w-4 h-4" /> },
         { href: '/admin/users', label: 'Users', icon: <Users className="w-4 h-4" /> },
         { href: '/admin/audit', label: 'Audit log', icon: <FileText className="w-4 h-4" /> },
+        { href: '/admin/settings', label: 'Settings', icon: <Settings className="w-4 h-4" /> },
       ]}
     >
       {children}
