@@ -228,3 +228,17 @@ model AuditEvent {
   @@index([createdAt])
   @@index([targetType, targetId])
 }
+
+// ─── Settings ──────────────────────────────────────────────────────
+
+/// Simple key-value store for admin-editable portal settings.
+/// Currently used for the download warning banner text, but designed to
+/// hold any future editable settings (welcome messages, T&Cs, etc).
+model PortalSetting {
+  key         String   @id
+  value       String   @db.Text
+  isPublic    Boolean  @default(false) /// true = clients can read; false = admin only
+  description String?
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+}
