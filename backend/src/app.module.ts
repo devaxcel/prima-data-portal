@@ -16,6 +16,7 @@ import { HealthModule } from './health/health.module';
 import { SearchModule } from './search/search.module';
 import { CategoriesModule } from './categories/categories.module';
 import { PreviewModule } from './preview/preview.module';
+import { SettingsModule } from './settings/settings.module';
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
@@ -36,6 +37,7 @@ import { PreviewModule } from './preview/preview.module';
     SearchModule,
     CategoriesModule,
     PreviewModule,
+    SettingsModule,
   ],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
