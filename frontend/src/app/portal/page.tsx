@@ -41,46 +41,94 @@ export default function PortalPage() {
   const items = data?.items ?? [];
   const selected = items.find((d: any) => d.id === selectedId) ?? items[0];
 
-  // Group by top-level category ancestor when sorting by category
-  const groups = useMemo(() => {
+  // Build a category tree matching the actual hierarchy the admin created,
+  // and hang datasets at the exact category node they belong to.
+  const tree = useMemo(() => {
     if (sortBy !== 'category' || items.length === 0) return null;
-    if (!categories.data) return null; // wait for categories to load before grouping
+    if (!categories.data) return null;
 
-    // Build id → category map to walk the parent chain
-    const catMap = new Map<string, { id: string; name: string; parentId: string | null }>();
-    categories.data.forEach((c: any) => catMap.set(c.id, c));
-
-    // Find the top-level ancestor (a category with no parent) for any category id
-    const rootOf = (catId: string | null | undefined): { id: string; name: string } => {
-      if (!catId) return { id: '__none__', name: 'Uncategorised' };
-      let cur = catMap.get(catId);
-      if (!cur) return { id: '__none__', name: 'Uncategorised' };
-      let safety = 0;
-      while (cur.parentId && catMap.has(cur.parentId) && safety < 50) {
-        cur = catMap.get(cur.parentId)!;
-        safety++;
-      }
-      return { id: cur.id, name: cur.name };
+    type Node = {
+      id: string;
+      name: string;
+      parentId: string | null;
+      children: Node[];
+      datasets: any[];
+      totalCount: number;
     };
 
-    const map = new Map<string, { id: string; name: string; datasets: any[] }>();
+    // Create a node for every category
+    const nodesById = new Map<string, Node>();
+    categories.data.forEach((c: any) => {
+      nodesById.set(c.id, {
+        id: c.id,
+        name: c.name,
+        parentId: c.parentId ?? null,
+        children: [],
+        datasets: [],
+        totalCount: 0,
+      });
+    });
+
+    // Link children to parents
+    const roots: Node[] = [];
+    nodesById.forEach((node) => {
+      if (node.parentId && nodesById.has(node.parentId)) {
+        nodesById.get(node.parentId)!.children.push(node);
+      } else {
+        roots.push(node);
+      }
+    });
+
+    // Attach datasets to their exact category
+    const uncategorised: any[] = [];
     for (const d of items) {
-      const root = rootOf(d.category?.id);
-      if (!map.has(root.id)) map.set(root.id, { id: root.id, name: root.name, datasets: [] });
-      map.get(root.id)!.datasets.push(d);
+      const cid = d.category?.id;
+      if (cid && nodesById.has(cid)) {
+        nodesById.get(cid)!.datasets.push(d);
+      } else {
+        uncategorised.push(d);
+      }
     }
-    return Array.from(map.values());
+
+    // Compute totalCount recursively (datasets in self + all descendants)
+    const countDown = (n: Node): number => {
+      let sum = n.datasets.length;
+      for (const c of n.children) sum += countDown(c);
+      n.totalCount = sum;
+      return sum;
+    };
+    roots.forEach(countDown);
+
+    // Prune branches that have no datasets anywhere in their subtree
+    const prune = (nodes: Node[]): Node[] =>
+      nodes
+        .filter((n) => n.totalCount > 0)
+        .map((n) => ({ ...n, children: prune(n.children) }));
+
+    const prunedRoots = prune(roots);
+
+    if (uncategorised.length > 0) {
+      prunedRoots.push({
+        id: '__uncategorised__',
+        name: 'Uncategorised',
+        parentId: null,
+        children: [],
+        datasets: uncategorised,
+        totalCount: uncategorised.length,
+      });
+    }
+
+    return prunedRoots;
   }, [items, sortBy, categories.data]);
 
-  // Auto-expand groups when the user is actively searching or filtering.
-  // Otherwise everything stays collapsed by default (Kieron's request).
+  // Auto-expand every folder when search or filter is active so results are visible
   const forceExpandAll = Boolean(search || categoryId);
-  const isExpanded = (groupId: string) => forceExpandAll || expandedGroups.has(groupId);
-  const toggleGroup = (groupId: string) => {
+  const isExpanded = (nodeId: string) => forceExpandAll || expandedGroups.has(nodeId);
+  const toggleGroup = (nodeId: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(groupId)) next.delete(groupId);
-      else next.add(groupId);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
       return next;
     });
   };
@@ -205,23 +253,22 @@ export default function PortalPage() {
               </td></tr>
             )}
 
-            {/* Grouped view (sort by category) */}
-            {groups && groups.map((group) => (
-              <GroupBlock
-                key={group.id}
-                groupId={group.id}
-                groupName={group.name}
-                items={group.datasets}
+            {/* Tree view (sort by category) */}
+            {tree && tree.map((node) => (
+              <CategoryFolder
+                key={node.id}
+                node={node}
+                depth={0}
                 selected={selected}
-                expanded={isExpanded(group.id)}
-                onToggle={() => toggleGroup(group.id)}
+                isExpanded={isExpanded}
+                onToggle={toggleGroup}
                 onSelect={setSelectedId}
               />
             ))}
 
             {/* Flat view (sort by name/updated) */}
-            {!groups && items.map((d: any) => (
-              <DatasetRow key={d.id} d={d} isSelected={selected?.id === d.id} onSelect={setSelectedId} />
+            {!tree && items.map((d: any) => (
+              <DatasetRow key={d.id} d={d} isSelected={selected?.id === d.id} onSelect={setSelectedId} depth={0} />
             ))}
           </tbody>
         </table>
@@ -275,45 +322,81 @@ export default function PortalPage() {
   );
 }
 
-function GroupBlock({ groupId, groupName, items, selected, expanded, onToggle, onSelect }: {
-  groupId: string;
-  groupName: string;
-  items: any[];
+function CategoryFolder({ node, depth, selected, isExpanded, onToggle, onSelect }: {
+  node: {
+    id: string;
+    name: string;
+    children: any[];
+    datasets: any[];
+    totalCount: number;
+  };
+  depth: number;
   selected: any;
-  expanded: boolean;
-  onToggle: () => void;
+  isExpanded: (id: string) => boolean;
+  onToggle: (id: string) => void;
   onSelect: (id: string) => void;
 }) {
+  const expanded = isExpanded(node.id);
+  const hasChildren = node.children.length > 0;
+  const hasDatasets = node.datasets.length > 0;
+
   return (
     <>
       <tr>
         <td
           colSpan={5}
-          className={`px-5 py-2.5 bg-stone-50/80 border-y border-stone-200 cursor-pointer select-none hover:bg-stone-100/70 transition ${expanded ? 'bg-stone-50' : ''}`}
-          onClick={onToggle}
+          className="bg-stone-50/60 border-y border-stone-100 cursor-pointer select-none hover:bg-stone-100/70 transition"
+          onClick={() => onToggle(node.id)}
+          style={{ paddingLeft: `${20 + depth * 22}px` }}
         >
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 py-2.5 pr-5">
             {expanded
-              ? <ChevronDown className="w-3.5 h-3.5 text-stone-500" />
-              : <ChevronRight className="w-3.5 h-3.5 text-stone-500" />}
+              ? <ChevronDown className="w-3.5 h-3.5 text-stone-500 flex-shrink-0" />
+              : <ChevronRight className="w-3.5 h-3.5 text-stone-500 flex-shrink-0" />}
             {expanded
-              ? <FolderOpen className="w-4 h-4 text-brand-600" />
-              : <Folder className="w-4 h-4 text-brand-500" />}
-            <span className="text-[12px] font-semibold text-stone-800">{groupName}</span>
+              ? <FolderOpen className="w-4 h-4 text-brand-600 flex-shrink-0" />
+              : <Folder className="w-4 h-4 text-brand-500 flex-shrink-0" />}
+            <span className="text-[12px] font-semibold text-stone-800">{node.name}</span>
             <span className="text-[11px] text-stone-500 ml-1">
-              {items.length} dataset{items.length === 1 ? '' : 's'}
+              {node.totalCount} dataset{node.totalCount === 1 ? '' : 's'}
             </span>
           </div>
         </td>
       </tr>
-      {expanded && items.map((d: any) => (
-        <DatasetRow key={d.id} d={d} isSelected={selected?.id === d.id} onSelect={onSelect} />
-      ))}
+
+      {expanded && (
+        <>
+          {/* Direct datasets (files sitting in this folder itself) */}
+          {hasDatasets && node.datasets.map((d: any) => (
+            <DatasetRow
+              key={d.id}
+              d={d}
+              isSelected={selected?.id === d.id}
+              onSelect={onSelect}
+              depth={depth + 1}
+            />
+          ))}
+
+          {/* Subfolders — render recursively */}
+          {hasChildren && node.children.map((child: any) => (
+            <CategoryFolder
+              key={child.id}
+              node={child}
+              depth={depth + 1}
+              selected={selected}
+              isExpanded={isExpanded}
+              onToggle={onToggle}
+              onSelect={onSelect}
+            />
+          ))}
+        </>
+      )}
     </>
   );
 }
 
-function DatasetRow({ d, isSelected, onSelect }: { d: any; isSelected: boolean; onSelect: (id: string) => void }) {
+function DatasetRow({ d, isSelected, onSelect, depth = 0 }: { d: any; isSelected: boolean; onSelect: (id: string) => void; depth?: number }) {
+  const indent = depth > 0 ? `${20 + depth * 22}px` : undefined;
   return (
     <tr
       onClick={() => onSelect(d.id)}
@@ -323,7 +406,7 @@ function DatasetRow({ d, isSelected, onSelect }: { d: any; isSelected: boolean; 
           : 'border-l-2 border-l-transparent hover:bg-stone-50/60'
       }`}
     >
-      <td className="px-5 py-3">
+      <td className="py-3" style={{ paddingLeft: indent ?? '20px', paddingRight: '8px' }}>
         <Link
           href={`/portal/datasets/${d.id}`}
           className="font-medium text-stone-900 hover:text-brand-600"
