@@ -1,7 +1,7 @@
 import { Injectable, Logger, Module } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import mammoth from 'mammoth';
-import pdfParse from 'pdf-parse';
+import { PDFParse } from 'pdf-parse';
 
 /** Tabular preview — for XLSX, CSV, etc */
 export interface TablePreview {
@@ -159,8 +159,10 @@ export class PreviewService {
   // ─── PDF ─────────────────────────────────────────────────────
 
   private async previewPdf(bytes: Buffer): Promise<PreviewResult> {
+    let parser: PDFParse | undefined;
     try {
-      const result = await pdfParse(bytes, { max: 5 }); // parse first 5 pages
+      parser = new PDFParse({ data: bytes });
+      const result = await parser.getText({ first: 5 }); // parse first 5 pages
       const fullText = (result.text ?? '').trim();
       if (!fullText) {
         return { supported: false, reason: 'The PDF appears to contain no extractable text (may be image-based/scanned).' };
@@ -170,13 +172,15 @@ export class PreviewService {
         supported: true, kind: 'text',
         text: truncated ? fullText.slice(0, MAX_TEXT_CHARS) + '…' : fullText,
         totalLength: fullText.length,
-        pageCount: result.numpages,
+        pageCount: result.total,
         fileType: 'PDF',
         truncated,
       };
     } catch (err) {
       this.logger.warn(`PDF preview failed: ${(err as Error).message}`);
       return { supported: false, reason: 'Could not read this PDF — it may be corrupt or password protected.' };
+    } finally {
+      await parser?.destroy();
     }
   }
 
