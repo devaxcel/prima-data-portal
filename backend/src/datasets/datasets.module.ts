@@ -283,11 +283,11 @@ function mimeToLabel(mimeType: string, fileName: string): string {
     versionId: string,
     fileKey: string,
     fileName: string,
-    mimeType: string,
+    _mimeType: string,
   ): Promise<void> {
     try {
       const bytes = await this.storage.fetchBytes(fileKey);
-      const result = this.preview.fromBytes(bytes, fileName, mimeType);
+      const result = await this.preview.fromBytes(bytes, fileName);
       await this.prisma.datasetVersion.update({
         where: { id: versionId },
         data: { previewData: result as any },
