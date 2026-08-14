@@ -36,7 +36,7 @@ export type PreviewResult = TablePreview | TextPreview | UnsupportedPreview;
 
 const MAX_ROWS = 100;
 const MAX_COLS = 40;
-const MAX_TEXT_CHARS = 5000; // ~800 words for Word/PDF previews
+const MAX_TEXT_CHARS = 200000; // ~32,000 words — effectively full document, with a safety ceiling
 
 const TABLE_EXTS = new Set(['xlsx', 'xls', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv']);
 const DOCX_EXTS = new Set(['docx']);
@@ -162,7 +162,7 @@ export class PreviewService {
     let parser: PDFParse | undefined;
     try {
       parser = new PDFParse({ data: bytes });
-      const result = await parser.getText({ first: 5 }); // parse first 5 pages
+      const result = await parser.getText(); // parse all pages (full document)
       const fullText = (result.text ?? '').trim();
       if (!fullText) {
         return { supported: false, reason: 'The PDF appears to contain no extractable text (may be image-based/scanned).' };
