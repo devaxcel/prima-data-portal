@@ -4,13 +4,24 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { FileText, Table as TableIcon, AlertCircle, Loader2 } from 'lucide-react';
 
-interface Supported {
+interface TablePreview {
   supported: true;
+  kind: 'table';
   sheetName?: string;
   columns: string[];
   rows: (string | number | null)[][];
   totalRows: number;
   totalColumns: number;
+  truncated: boolean;
+}
+
+interface TextPreview {
+  supported: true;
+  kind: 'text';
+  text: string;
+  totalLength: number;
+  pageCount?: number;
+  fileType: string;
   truncated: boolean;
 }
 
@@ -20,7 +31,9 @@ interface Unsupported {
   fileType?: string;
 }
 
-type PreviewResponse = Supported | Unsupported;
+// Older cached previews may lack the `kind` field; treat those as tables
+type LegacyTable = Omit<TablePreview, 'kind'>;
+type PreviewResponse = TablePreview | TextPreview | Unsupported | LegacyTable;
 
 interface Props {
   datasetId: string;
@@ -66,7 +79,43 @@ export function DatasetPreviewTable({ datasetId, maxHeight = 420 }: Props) {
     );
   }
 
-  const { columns, rows, totalRows, totalColumns, truncated, sheetName } = data;
+  // Text preview (DOCX / PDF)
+  if ('kind' in data && data.kind === 'text') {
+    return (
+      <div className="border border-stone-200 rounded-lg overflow-hidden">
+        <div className="px-4 py-2 bg-stone-50 border-b border-stone-200 flex items-center justify-between gap-3 text-xs text-stone-500">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileText className="w-3.5 h-3.5 text-stone-400 flex-shrink-0" />
+            <span className="truncate">
+              <span className="font-medium text-stone-700">{data.fileType}</span>
+              {data.pageCount ? <> · {data.pageCount} page{data.pageCount === 1 ? '' : 's'}</> : null}
+              <> · {data.totalLength.toLocaleString()} characters</>
+            </span>
+          </div>
+          {data.truncated && (
+            <span className="text-[10px] uppercase tracking-wider text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 font-medium whitespace-nowrap">
+              Truncated
+            </span>
+          )}
+        </div>
+        <div
+          className="overflow-auto p-4 text-xs text-stone-700 whitespace-pre-wrap leading-relaxed font-serif bg-white"
+          style={{ maxHeight }}
+        >
+          {data.text}
+        </div>
+        {data.truncated && (
+          <div className="px-4 py-2 bg-stone-50 border-t border-stone-200 text-[11px] text-stone-500 text-center">
+            Preview shows the beginning of the document. Download the file to see the full contents.
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Table preview — either kind === 'table' or older legacy shape (no kind field)
+  const tableData = data as TablePreview;
+  const { columns, rows, totalRows, totalColumns, truncated, sheetName } = tableData;
 
   if (rows.length === 0) {
     return (
