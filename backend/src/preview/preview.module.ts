@@ -1,13 +1,28 @@
 import { Injectable, Logger, Module } from '@nestjs/common';
 import * as XLSX from 'xlsx';
+import mammoth from 'mammoth';
+import pdfParse from 'pdf-parse';
 
-export interface DatasetPreview {
+/** Tabular preview — for XLSX, CSV, etc */
+export interface TablePreview {
   supported: true;
+  kind: 'table';
   sheetName?: string;
   columns: string[];
   rows: (string | number | null)[][];
   totalRows: number;
   totalColumns: number;
+  truncated: boolean;
+}
+
+/** Text preview — for DOCX, PDF */
+export interface TextPreview {
+  supported: true;
+  kind: 'text';
+  text: string;
+  totalLength: number;
+  pageCount?: number;
+  fileType: string;
   truncated: boolean;
 }
 
@@ -17,68 +32,58 @@ export interface UnsupportedPreview {
   fileType?: string;
 }
 
-export type PreviewResult = DatasetPreview | UnsupportedPreview;
+export type PreviewResult = TablePreview | TextPreview | UnsupportedPreview;
 
 const MAX_ROWS = 100;
 const MAX_COLS = 40;
-
-/** File types we can extract table data from */
-const TABLE_TYPES = new Set([
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
-  'application/vnd.ms-excel',                                          // xls
-  'application/vnd.oasis.opendocument.spreadsheet',                    // ods
-  'text/csv',                                                          // csv
-  'text/tab-separated-values',                                         // tsv
-  'application/csv',
-]);
+const MAX_TEXT_CHARS = 5000; // ~800 words for Word/PDF previews
 
 const TABLE_EXTS = new Set(['xlsx', 'xls', 'xlsm', 'xlsb', 'ods', 'csv', 'tsv']);
+const DOCX_EXTS = new Set(['docx']);
+const PDF_EXTS = new Set(['pdf']);
 
 @Injectable()
 export class PreviewService {
   private readonly logger = new Logger(PreviewService.name);
 
   /**
-   * Attempt to extract a preview from raw file bytes.
-   * Never throws — always returns a PreviewResult (either supported or a
-   * `supported: false` explanation).
+   * Extract a preview from raw file bytes. Never throws — always returns
+   * a PreviewResult (either supported or a `supported: false` explanation).
+   * Async because DOCX/PDF parsers are promise-based.
    */
-  fromBytes(bytes: Buffer, fileName: string, mimeType: string): PreviewResult {
-    if (!this.isTableFile(fileName, mimeType)) {
-      return {
-        supported: false,
-        reason: 'Preview is only available for spreadsheet files (XLSX, CSV, TSV).',
-        fileType: this.extOf(fileName).toUpperCase() || 'FILE',
-      };
-    }
+  async fromBytes(bytes: Buffer, fileName: string): Promise<PreviewResult> {
+    const ext = this.extOf(fileName);
 
+    if (TABLE_EXTS.has(ext)) return this.previewSpreadsheet(bytes, fileName);
+    if (DOCX_EXTS.has(ext)) return this.previewDocx(bytes);
+    if (PDF_EXTS.has(ext)) return this.previewPdf(bytes);
+
+    return {
+      supported: false,
+      reason: 'Preview is available for spreadsheets (XLSX, CSV), Word documents (DOCX), and PDFs.',
+      fileType: ext.toUpperCase() || 'FILE',
+    };
+  }
+
+  // ─── Spreadsheet ─────────────────────────────────────────────
+
+  private previewSpreadsheet(bytes: Buffer, fileName: string): PreviewResult {
     try {
       const workbook = XLSX.read(bytes, { type: 'buffer', cellDates: true, cellFormula: false });
-      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+      if (!workbook.SheetNames?.length) {
         return { supported: false, reason: 'The file has no readable sheets.' };
       }
 
-      // Try each sheet in order; take the first with meaningful tabular data.
-      // Complex Excel models (e.g. financial models) often have a "Dashboard"
-      // sheet full of charts as sheet 0 — no tabular data. We should skip past
-      // that to find the actual data sheet (Income Statement, Balance Sheet, etc).
-      let best: {
-        sheetName: string;
-        aoa: any[][];
-        score: number;
-      } | null = null;
+      // Try each sheet; pick the first with meaningful tabular data
+      let best: { sheetName: string; aoa: any[][]; score: number } | null = null;
 
       for (const candidateName of workbook.SheetNames) {
         const sheet = workbook.Sheets[candidateName];
         if (!sheet) continue;
         const aoa = XLSX.utils.sheet_to_json<any[]>(sheet, {
-          header: 1,
-          blankrows: false,
-          defval: null,
-          raw: false,
+          header: 1, blankrows: false, defval: null, raw: false,
         });
 
-        // Score based on how "tabular" the data looks
         const rowCount = aoa.length;
         if (rowCount < 2) continue;
 
@@ -86,20 +91,14 @@ export class PreviewService {
         const colCount = headerRow.length;
         if (colCount < 2) continue;
 
-        // Count non-null cells across all rows (sample first 20 rows for speed)
         let nonNullCells = 0;
         for (let i = 0; i < Math.min(20, aoa.length); i++) {
           const row = (aoa[i] ?? []) as any[];
           nonNullCells += row.filter((v) => v != null && v !== '').length;
         }
-        // Score: cells × rows-log — favours sheets with real content
         const score = nonNullCells * Math.log2(Math.max(rowCount, 2));
 
-        if (!best || score > best.score) {
-          best = { sheetName: candidateName, aoa, score };
-        }
-
-        // Fast-exit: first "obviously good" sheet wins
+        if (!best || score > best.score) best = { sheetName: candidateName, aoa, score };
         if (rowCount > 5 && colCount > 3 && nonNullCells > 20) {
           best = { sheetName: candidateName, aoa, score };
           break;
@@ -111,7 +110,7 @@ export class PreviewService {
       }
 
       const { sheetName, aoa } = best;
-      const totalRows = Math.max(0, aoa.length - 1); // excludes header
+      const totalRows = Math.max(0, aoa.length - 1);
       const rawHeader = (aoa[0] ?? []) as any[];
       const totalColumns = rawHeader.length;
       const columns = rawHeader
@@ -125,27 +124,63 @@ export class PreviewService {
       }
 
       return {
-        supported: true,
-        sheetName,
-        columns,
-        rows,
-        totalRows,
-        totalColumns,
+        supported: true, kind: 'table',
+        sheetName, columns, rows, totalRows, totalColumns,
         truncated: totalRows > MAX_ROWS || totalColumns > MAX_COLS,
       };
     } catch (err) {
-      this.logger.warn(`Preview extraction failed for ${fileName}: ${(err as Error).message}`);
-      return {
-        supported: false,
-        reason: 'Could not read the file — it may be corrupt or password protected.',
-      };
+      this.logger.warn(`Spreadsheet preview failed for ${fileName}: ${(err as Error).message}`);
+      return { supported: false, reason: 'Could not read the file — it may be corrupt or password protected.' };
     }
   }
 
-  private isTableFile(fileName: string, mimeType: string): boolean {
-    if (TABLE_TYPES.has(mimeType.toLowerCase())) return true;
-    return TABLE_EXTS.has(this.extOf(fileName));
+  // ─── DOCX ────────────────────────────────────────────────────
+
+  private async previewDocx(bytes: Buffer): Promise<PreviewResult> {
+    try {
+      const result = await mammoth.extractRawText({ buffer: bytes });
+      const fullText = (result.value ?? '').trim();
+      if (!fullText) return { supported: false, reason: 'The document appears to be empty or unreadable.' };
+
+      const truncated = fullText.length > MAX_TEXT_CHARS;
+      return {
+        supported: true, kind: 'text',
+        text: truncated ? fullText.slice(0, MAX_TEXT_CHARS) + '…' : fullText,
+        totalLength: fullText.length,
+        fileType: 'DOCX',
+        truncated,
+      };
+    } catch (err) {
+      this.logger.warn(`DOCX preview failed: ${(err as Error).message}`);
+      return { supported: false, reason: 'Could not read this Word document — it may be corrupt or password protected.' };
+    }
   }
+
+  // ─── PDF ─────────────────────────────────────────────────────
+
+  private async previewPdf(bytes: Buffer): Promise<PreviewResult> {
+    try {
+      const result = await pdfParse(bytes, { max: 5 }); // parse first 5 pages
+      const fullText = (result.text ?? '').trim();
+      if (!fullText) {
+        return { supported: false, reason: 'The PDF appears to contain no extractable text (may be image-based/scanned).' };
+      }
+      const truncated = fullText.length > MAX_TEXT_CHARS;
+      return {
+        supported: true, kind: 'text',
+        text: truncated ? fullText.slice(0, MAX_TEXT_CHARS) + '…' : fullText,
+        totalLength: fullText.length,
+        pageCount: result.numpages,
+        fileType: 'PDF',
+        truncated,
+      };
+    } catch (err) {
+      this.logger.warn(`PDF preview failed: ${(err as Error).message}`);
+      return { supported: false, reason: 'Could not read this PDF — it may be corrupt or password protected.' };
+    }
+  }
+
+  // ─── Helpers ─────────────────────────────────────────────────
 
   private extOf(fileName: string): string {
     return (fileName.split('.').pop() ?? '').toLowerCase();
